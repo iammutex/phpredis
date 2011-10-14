@@ -166,6 +166,7 @@ static zend_function_entry redis_functions[] = {
      PHP_ME(Redis, zDeleteRangeByRank, NULL, ZEND_ACC_PUBLIC)
      PHP_ME(Redis, zCard, NULL, ZEND_ACC_PUBLIC)
      PHP_ME(Redis, zScore, NULL, ZEND_ACC_PUBLIC)
+     PHP_ME(Redis, zmScore, NULL, ZEND_ACC_PUBLIC)
      PHP_ME(Redis, zRank, NULL, ZEND_ACC_PUBLIC)
      PHP_ME(Redis, zRevRank, NULL, ZEND_ACC_PUBLIC)
      PHP_ME(Redis, zInter, NULL, ZEND_ACC_PUBLIC)
@@ -3661,6 +3662,7 @@ PHP_METHOD(Redis, zCard)
 }
 /* }}} */
 
+
 /* {{{ proto double Redis::zScore(string key, mixed member)
  */
 PHP_METHOD(Redis, zScore)
@@ -3693,6 +3695,89 @@ PHP_METHOD(Redis, zScore)
 	    redis_bulk_double_response(INTERNAL_FUNCTION_PARAM_PASSTHRU, redis_sock, NULL, NULL);
 	}
 	REDIS_PROCESS_RESPONSE(redis_bulk_double_response);
+}
+/* }}} */
+
+
+
+/* {{{ proto array Redis::zmScore(string key, array members)
+ */
+PHP_METHOD(Redis, zmScore)
+{
+    zval *object, *array,**data;
+    HashTable *arr_hash;
+    HashPosition pointer;
+    RedisSock *redis_sock;
+    char *rkey = NULL, *val = NULL, *cmd = "", *old_cmd = NULL;
+    int rkey_len, cmd_len = 0, array_count, elements = 2;
+    zval *z_value;
+    if (zend_parse_method_parameters(ZEND_NUM_ARGS() TSRMLS_CC, getThis(), "Osa",
+                                     &object, redis_ce, &rkey, &rkey_len,
+                                     &array) == FAILURE) {
+        RETURN_FALSE;
+    }
+
+    if (redis_sock_get(object, &redis_sock TSRMLS_CC) < 0) {
+        RETURN_FALSE;
+    }
+
+    arr_hash    = Z_ARRVAL_P(array);
+    array_count = zend_hash_num_elements(arr_hash);
+
+    if (array_count == 0) {
+        RETURN_FALSE;
+    }
+
+    for (zend_hash_internal_pointer_reset_ex(arr_hash, &pointer);
+         zend_hash_get_current_data_ex(arr_hash, (void**) &data,
+                                       &pointer) == SUCCESS;
+         zend_hash_move_forward_ex(arr_hash, &pointer)) {
+
+        char *key;
+        int key_len;
+        zval *z_tmp = NULL;
+                char *old_cmd;
+
+        if (Z_TYPE_PP(data) == IS_STRING) {
+            key = Z_STRVAL_PP(data);
+            key_len = Z_STRLEN_PP(data);
+        } else { /* not a string, copy and convert. */
+            MAKE_STD_ZVAL(z_tmp);
+            *z_tmp = **data;
+            zval_copy_ctor(z_tmp);
+            convert_to_string(z_tmp);
+
+            key = Z_STRVAL_P(z_tmp);
+            key_len = Z_STRLEN_P(z_tmp);
+        }
+        old_cmd = NULL;
+        if(*cmd) {
+            old_cmd = cmd;
+        }
+        cmd_len = redis_cmd_format(&cmd, "%s$%d" _NL "%s" _NL
+                        , cmd, cmd_len
+                        , key_len, key, key_len);
+
+        if(old_cmd) {
+            efree(old_cmd);
+        }
+        elements++;
+        if(z_tmp) {
+            zval_dtor(z_tmp);
+            efree(z_tmp);
+        }
+    }
+    old_cmd = cmd;
+    cmd_len = redis_cmd_format(&cmd, "*%d" _NL "$7" _NL "ZMSCORE" _NL "$%d" _NL "%s" _NL "%s", elements, rkey_len, rkey, rkey_len, cmd, cmd_len);
+    efree(old_cmd);
+
+	REDIS_PROCESS_REQUEST(redis_sock, cmd, cmd_len);
+	IF_ATOMIC() {
+	    if (redis_sock_read_multibulk_reply(INTERNAL_FUNCTION_PARAM_PASSTHRU,redis_sock, NULL, NULL) < 0) {
+            	RETURN_FALSE;
+            }
+	}
+	REDIS_PROCESS_RESPONSE(redis_sock_read_multibulk_reply);
 }
 /* }}} */
 
